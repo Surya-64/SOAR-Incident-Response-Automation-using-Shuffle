@@ -1,0 +1,4 @@
+"phish_server": {
+    "listen_url": "0.0.0.0:8080",
+    "use_tls": false
+},
