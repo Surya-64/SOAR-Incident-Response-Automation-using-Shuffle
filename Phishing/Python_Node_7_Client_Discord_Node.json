@@ -1,0 +1,89 @@
+import requests
+import json
+# --- CONFIGURATION ---
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+# --- EXECUTION BLOCK ---
+try:
+    # 1. Safely inject data from multiple Shuffle nodes
+    exec_str = """$exec"""
+    decision_str = """$decision_engine.message"""
+    wazuh_str = """$wazuh_active_response.message"""
+    
+    def safe_parse(s):
+        if not s or s.startswith('$'): return {}
+        if isinstance(s, dict): return s
+        try: return json.loads(s)
+        except: return {}
+    exec_data = safe_parse(exec_str)
+    decision_data = safe_parse(decision_str)
+    wazuh_data = safe_parse(wazuh_str)
+    # 2. Extract Origin/Phishing Data
+    subject = exec_data.get("email_subject", "Unknown Subject")
+    sender = exec_data.get("sender", "Unknown Sender")
+    mal_url = exec_data.get("malicious_url", "Unknown URL")
+    # 3. Extract Threat Intel / Decision Data
+    score = decision_data.get("total_risk_score", 0)
+    action = decision_data.get("final_action", "UNKNOWN")
+    evidence_list = decision_data.get("evidence_chain", ["No specific evidence extracted."])
+    target_ip = decision_data.get("target_ip", exec_data.get("ip", "Unknown IP"))
+    # 4. Extract Wazuh Containment Status
+    wazuh_resp = wazuh_data.get("wazuh_response", {})
+    # Check if Wazuh API returned an error code = 0 (Success)
+    if action == "BLOCK" and wazuh_resp.get("error") == 0:
+        containment_status = "✅ **Success:** `firewall-drop` executed on Wazuh Agent"
+    elif action == "BLOCK":
+        containment_status = "⚠️ **Warning:** IP Block attempted but Wazuh API did not confirm."
+    else:
+        containment_status = "ℹ️ **Skipped:** No block required for this alert level."
+    # 5. Format the UI Elements
+    evidence_text = "```\n" + "\n".join(evidence_list) + "\n```"
+    color_code = 15158332 if action == "BLOCK" else 15844367  # Red for block, Orange for alert
+    # 6. Construct the Advanced Discord Embed
+    payload = {
+        "username": "SOC Autobot",
+        "avatar_url": "https://cdn-icons-png.flaticon.com/512/4712/4712010.png", # Robot icon
+        "embeds": [{
+            "title": "🚨 CRITICAL: Automated Incident Response",
+            "description": "**SOAR Pipeline triggered a containment action based on Threat Intelligence.**",
+            "color": color_code,
+            "fields": [
+                {
+                    "name": "📧 Incident Origin (Phishing Trigger)",
+                    "value": f"**Subject:** {subject}\n**Sender:** `{sender}`\n**Link:** `{mal_url}`",
+                    "inline": False
+                },
+                {
+                    "name": "📊 Threat Intelligence",
+                    "value": f"**Risk Score:** {score}/100+\n**Decision:** {action}",
+                    "inline": True
+                },
+                {
+                    "name": "🛡️ Containment Status (Wazuh)",
+                    "value": f"**Target IP:** `{target_ip}`\n{containment_status}",
+                    "inline": True
+                },
+                {
+                    "name": "🔎 Threat Analyst Evidence Chain",
+                    "value": evidence_text,
+                    "inline": False
+                }
+            ],
+            "footer": {
+                "text": "Client Report | Wazuh + Shuffle SOAR | March 2026",
+                "icon_url": "https://cdn-icons-png.flaticon.com/512/2092/2092663.png" # Shield icon
+            }
+        }]
+    }
+    # 7. Execute the request
+    response = requests.post(
+        DISCORD_WEBHOOK_URL,
+        json=payload,
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    if response.status_code in [200, 204]:
+        print(json.dumps({"success": True, "message": "Detailed Client Report sent to Discord."}))
+    else:
+        print(json.dumps({"success": False, "error": f"Discord API Error: {response.status_code} - {response.text}"}))
+except Exception as e:
+    print(json.dumps({"error": f"Discord Node Failed: {str(e)}"}))
